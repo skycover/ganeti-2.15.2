@@ -1,0 +1,103 @@
+Author: Yannis Tsiouris <tsiou@grnet.gr>
+Description: Make MetaD build against snap-server 1.0
+ Rework the error handling logic to reflect snap's move to the IO Monad.
+Forwarded: no
+Last-Update: 2016-12-13
+diff --git a/src/Ganeti/Metad/ConfigCore.hs b/src/Ganeti/Metad/ConfigCore.hs
+index 7211c7e71..bba0b209f 100644
+--- a/src/Ganeti/Metad/ConfigCore.hs
++++ b/src/Ganeti/Metad/ConfigCore.hs
+@@ -1,5 +1,6 @@
+ {-# LANGUAGE TupleSections, TemplateHaskell, CPP, UndecidableInstances,
+-    MultiParamTypeClasses, TypeFamilies, GeneralizedNewtypeDeriving #-}
++    MultiParamTypeClasses, TypeFamilies, GeneralizedNewtypeDeriving,
++    ImpredicativeTypes #-}
+ {-| Functions of the metadata daemon exported for RPC
+ 
+ -}
+diff --git a/src/Ganeti/Metad/WebServer.hs b/src/Ganeti/Metad/WebServer.hs
+index 56876f7ee..4e8315ef2 100644
+--- a/src/Ganeti/Metad/WebServer.hs
++++ b/src/Ganeti/Metad/WebServer.hs
+@@ -37,9 +37,10 @@ module Ganeti.Metad.WebServer (start) where
+ 
+ import Control.Applicative
+ import Control.Concurrent (MVar, readMVar)
+-import Control.Monad.Error.Class (MonadError, catchError, throwError)
+ import Control.Monad.IO.Class (liftIO)
+-import Control.Exception.Lifted (catch)
++import Data.Typeable (Typeable)
++import Control.Exception.Base (Exception)
++import Control.Exception.Lifted (catch, throwIO)
+ import qualified Data.CaseInsensitive as CI
+ import Data.List (intercalate)
+ import Data.Map (Map)
+@@ -63,13 +64,19 @@ import Ganeti.Metad.Types (InstanceParams)
+ 
+ type MetaM = Snap ()
+ 
++data MetaMExc = MetaMExc String deriving (Show, Typeable)
++instance Exception MetaMExc
++
++throwError :: String -> Snap a
++throwError = throwIO . MetaMExc
++
+ split :: String -> [String]
+ split str =
+   case span (/= '/') str of
+     (x, []) -> [x]
+     (x, _:xs) -> x:split xs
+ 
+-lookupInstanceParams :: MonadError String m => String -> Map String b -> m b
++lookupInstanceParams :: String -> Map String b -> Snap b
+ lookupInstanceParams inst params =
+   case Map.lookup inst params of
+     Nothing -> throwError $ "Could not get instance params for " ++ show inst
+@@ -87,7 +94,7 @@ error405 ms = modifyResponse $
+   addHeader (CI.mk "Allow") (ByteString.pack . intercalate ", " $ map show ms)
+   . setResponseStatus 405 "Method not allowed"
+ 
+-maybeResult :: MonadError String m => Result t -> (t -> m a) -> m a
++maybeResult :: Result t -> (t -> Snap a) -> Snap a
+ maybeResult (Error err) _ = throwError err
+ maybeResult (Ok x) f = f x
+ 
+@@ -144,10 +151,11 @@ handleMetadata params GET  "ganeti" "latest" "os/os-install-package" =
+        Logging.logInfo $ "OS install package for " ++ show remoteAddr
+        readMVar params
+      serveOsPackage remoteAddr instanceParams "os-install-package"
+-       `catchError`
++       `catch`
+        \err -> do
++         let MetaMExc e = err
+          liftIO .
+-           Logging.logWarning $ "Could not serve OS install package: " ++ err
++           Logging.logWarning $ "Could not serve OS install package: " ++ e
+          error404
+ handleMetadata params GET  "ganeti" "latest" "os/package" =
+   do remoteAddr <- ByteString.unpack . rqRemoteAddr <$> getRequest
+@@ -160,18 +168,20 @@ handleMetadata params GET  "ganeti" "latest" "os/parameters.json" =
+      instanceParams <- liftIO $ do
+        Logging.logInfo $ "OS parameters for " ++ show remoteAddr
+        readMVar params
+-     serveOsParams remoteAddr instanceParams `catchError`
++     serveOsParams remoteAddr instanceParams `catch`
+        \err -> do
+-         liftIO . Logging.logWarning $ "Could not serve OS parameters: " ++ err
++         let MetaMExc e = err
++         liftIO . Logging.logWarning $ "Could not serve OS parameters: " ++ e
+          error404
+ handleMetadata params GET  "ganeti" "latest" script | isScript script =
+   do remoteAddr <- ByteString.unpack . rqRemoteAddr <$> getRequest
+      instanceParams <- liftIO $ do
+        Logging.logInfo $ "OS package for " ++ show remoteAddr
+        readMVar params
+-     serveOsScript remoteAddr instanceParams (last $ split script) `catchError`
++     serveOsScript remoteAddr instanceParams (last $ split script) `catch`
+        \err -> do
+-         liftIO . Logging.logWarning $ "Could not serve OS scripts: " ++ err
++         let MetaMExc e = err
++         liftIO . Logging.logWarning $ "Could not serve OS scripts: " ++ e
+          error404
+   where isScript =
+           (`elem` [ "os/scripts/create"

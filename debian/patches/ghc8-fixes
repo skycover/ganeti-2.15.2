@@ -1,0 +1,285 @@
+Author: Apollon Oikonomopoulos <apoikos@debian.org>
+Description: Fix compilation with GHC8 (part 1)
+ Mostly changes in Template Haskell and a first take at patching Metad. 
+Forwarded: https://groups.google.com/forum/#!topic/ganeti-devel/MaNaxQHr2BA
+Last-Update: 2016-12-13
+--- a/src/Ganeti/Metad/WebServer.hs
++++ b/src/Ganeti/Metad/WebServer.hs
+@@ -39,7 +39,7 @@
+ import Control.Concurrent (MVar, readMVar)
+ import Control.Monad.Error.Class (MonadError, catchError, throwError)
+ import Control.Monad.IO.Class (liftIO)
+-import qualified Control.Monad.CatchIO as CatchIO (catch)
++import Control.Exception.Lifted (catch)
+ import qualified Data.CaseInsensitive as CI
+ import Data.List (intercalate)
+ import Data.Map (Map)
+@@ -105,7 +105,7 @@
+      maybeResult (JSON.readJSON instParams >>=
+                   Config.getPublicOsParams >>=
+                   getOsPackage) $ \package ->
+-       serveFile package `CatchIO.catch` \err ->
++       serveFile package `catch` \err ->
+          throwError $ "Could not serve OS package: " ++ show (err :: IOError)
+   where getOsPackage osParams =
+           case lookup key (JSON.fromJSObject osParams) of
+@@ -130,7 +130,7 @@
+           throwError $ "Could not find OS script " ++ show (os </> script)
+         serveScript os (d:ds) =
+           serveFile (d </> os </> script)
+-          `CatchIO.catch`
++          `catch`
+           \err -> do let _ = err :: IOError
+                      serveScript os ds
+ 
+--- a/src/Ganeti/THH.hs
++++ b/src/Ganeti/THH.hs
+@@ -105,6 +105,8 @@
+ import Ganeti.PyValue
+ import Ganeti.THH.PyType
+ 
++myNotStrict :: Bang
++myNotStrict = Bang NoSourceUnpackedness NoSourceStrictness
+ 
+ -- * Exported types
+ 
+@@ -417,15 +419,16 @@
+ buildConsField :: Q Type -> StrictTypeQ
+ buildConsField ftype = do
+   ftype' <- ftype
+-  return (NotStrict, ftype')
++  return (myNotStrict, ftype')
+ 
+ -- | Builds a constructor based on a simple definition (not field-based).
+ buildSimpleCons :: Name -> SimpleObject -> Q Dec
+ buildSimpleCons tname cons = do
++  names <- mapM conT [''Show, ''Eq]
+   decl_d <- mapM (\(cname, fields) -> do
+                     fields' <- mapM (buildConsField . snd) fields
+                     return $ NormalC (mkName cname) fields') cons
+-  return $ DataD [] tname [] decl_d [''Show, ''Eq]
++  return $ DataD [] tname [] Nothing decl_d names
+ 
+ -- | Generate the save function for a given type.
+ genSaveSimpleObj :: Name                            -- ^ Object type
+@@ -444,11 +447,11 @@
+ -- | Generates a data type declaration.
+ --
+ -- The type will have a fixed list of instances.
+-strADTDecl :: Name -> [String] -> Dec
+-strADTDecl name constructors =
+-  DataD [] name []
++strADTDecl :: Name -> [String] -> Q Dec
++strADTDecl name constructors = do
++  DataD [] name [] Nothing
+           (map (flip NormalC [] . mkName) constructors)
+-          [''Show, ''Eq, ''Enum, ''Bounded, ''Ord]
++          <$> mapM conT [''Show, ''Eq, ''Enum, ''Bounded, ''Ord]
+ 
+ -- | Generates a toRaw function.
+ --
+@@ -522,9 +525,9 @@
+   :: (a -> Either String Name) -> Name -> String -> [(String, a)] -> Q [Dec]
+ declareADT fn traw sname cons = do
+   let name = mkName sname
+-      ddecl = strADTDecl name (map fst cons)
+       -- process cons in the format expected by genToRaw
+       cons' = map (second fn) cons
++  ddecl <- strADTDecl (mkName sname) (map fst cons)
+   toraw <- genToRaw traw (toRawName sname) name cons'
+   fromraw <- genFromRaw traw (fromRawName sname) name cons'
+   return $ ddecl:toraw ++ fromraw
+@@ -592,7 +595,7 @@
+   let base = nameBase name
+   showJ <- genShowJSON base
+   readJ <- genReadJSON base
+-  return [InstanceD [] (AppT (ConT ''JSON.JSON) (ConT name)) [readJ,showJ]]
++  return [InstanceD Nothing [] (AppT (ConT ''JSON.JSON) (ConT name)) [readJ,showJ]]
+ 
+ -- * Template code for opcodes
+ 
+@@ -617,7 +620,7 @@
+ reifyConsNames name = do
+   reify_result <- reify name
+   case reify_result of
+-    TyConI (DataD _ _ _ cons _) -> mapM (liftM nameBase . constructorName) cons
++    TyConI (DataD _ _ _ Nothing cons _) -> mapM (liftM nameBase . constructorName) cons
+     o -> fail $ "Unhandled name passed to reifyConsNames, expected\
+                 \ type constructor but got '" ++ show o ++ "'"
+ 
+@@ -766,7 +769,7 @@
+ genOpCodeDictObject tname savefn loadfn cons = do
+   tdclauses <- genSaveOpCode cons savefn
+   fdclauses <- genLoadOpCode cons loadfn
+-  return [ InstanceD [] (AppT (ConT ''DictObject) (ConT tname))
++  return [ InstanceD Nothing [] (AppT (ConT ''DictObject) (ConT tname))
+            [ FunD 'toDict tdclauses
+            , FunD 'fromDictWKeys fdclauses
+            ]]
+@@ -787,7 +790,7 @@
+                     fields' <- mapM (fieldTypeInfo "op") fields
+                     return $ RecC (mkName cname) fields')
+             cons
+-  let declD = DataD [] tname [] decl_d [''Show, ''Eq]
++  declD <- DataD [] tname [] Nothing decl_d <$> mapM conT [''Show, ''Eq]
+   let (allfsig, allffn) = genAllOpFields "allOpFields" cons
+   -- DictObject
+   let luxiCons = map opcodeConsToLuxiCons cons
+@@ -911,10 +914,10 @@
+   decl_d <- mapM (\(cname, fields) -> do
+                     -- we only need the type of the field, without Q
+                     fields' <- mapM actualFieldType fields
+-                    let fields'' = zip (repeat NotStrict) fields'
++                    let fields'' = zip (repeat myNotStrict) fields'
+                     return $ NormalC (mkName cname) fields'')
+             cons
+-  let declD = DataD [] (mkName name) [] decl_d [''Show, ''Eq]
++  declD <- DataD [] (mkName name) [] Nothing decl_d <$> mapM conT [''Show, ''Eq]
+   -- generate DictObject instance
+   dictObjInst <- genOpCodeDictObject tname saveLuxiConstructor
+                                      loadOpConstructor cons
+@@ -949,7 +952,7 @@
+ fieldTypeInfo field_pfx fd = do
+   t <- actualFieldType fd
+   let n = mkName . (field_pfx ++) . fieldRecordName $ fd
+-  return (n, NotStrict, t)
++  return (n, myNotStrict, t)
+ 
+ -- | Build an object declaration.
+ buildObject :: String -> String -> [Field] -> Q [Dec]
+@@ -961,7 +964,7 @@
+   let name = mkName sname
+   fields_d <- mapM (fieldTypeInfo field_pfx) fields
+   let decl_d = RecC name fields_d
+-  let declD = DataD [] name [] [decl_d] [''Show, ''Eq]
++  declD <- DataD [] name [] Nothing [decl_d] <$> mapM conT [''Show, ''Eq]
+   ser_decls <- buildObjectSerialisation sname fields
+   return $ declD:ser_decls
+ 
+@@ -1056,10 +1059,10 @@
+                       (map makeOptional fields)
+   let name = mkName sname
+       real_d = NormalC (mkName real_nm)
+-                 [(NotStrict, ConT (mkName real_data_nm))]
++                 [(myNotStrict, ConT (mkName real_data_nm))]
+       forth_d = NormalC (mkName forth_nm)
+-                  [(NotStrict, ConT (mkName forth_data_nm))]
+-      declD = DataD [] name [] [real_d, forth_d] [''Show, ''Eq]
++                  [(myNotStrict, ConT (mkName forth_data_nm))]
++  declD <- DataD [] name [] Nothing [real_d, forth_d] <$> mapM conT [''Show, ''Eq]
+ 
+   read_body <- [| branchOnField "forthcoming"
+                   (liftM $(conE $ mkName forth_nm) . JSON.readJSON)
+@@ -1075,7 +1078,7 @@
+                  , Clause [ConP (mkName forth_nm) [VarP x]]
+                     (NormalB show_forth_body) []
+                  ]
+-      instJSONdecl = InstanceD [] (AppT (ConT ''JSON.JSON) (ConT name))
++      instJSONdecl = InstanceD Nothing [] (AppT (ConT ''JSON.JSON) (ConT name))
+                      [rdjson, shjson]
+   accessors <- liftM concat . flip mapM fields
+                  $ buildAccessor (mkName forth_nm) forth_pfx
+@@ -1100,7 +1103,7 @@
+                             ]
+       fromdict = FunD 'fromDictWKeys [ Clause [VarP xs]
+                                        (NormalB fromDictWKeysbody) [] ]
+-      instDict = InstanceD [] (AppT (ConT ''DictObject) (ConT name))
++      instDict = InstanceD Nothing [] (AppT (ConT ''DictObject) (ConT name))
+                  [todict, fromdict]
+   instArray <- genArrayObjectInstance name
+                  (simpleField "forthcoming" [t| Bool |] : fields)
+@@ -1127,7 +1130,7 @@
+   (loadsig, loadfn) <- genLoadObject sname
+   shjson <- objectShowJSON sname
+   rdjson <- objectReadJSON sname
+-  let instdecl = InstanceD [] (AppT (ConT ''JSON.JSON) (ConT name))
++  let instdecl = InstanceD Nothing [] (AppT (ConT ''JSON.JSON) (ConT name))
+                  [rdjson, shjson]
+   return $ dictdecls ++ savedecls ++ [loadsig, loadfn, instdecl]
+ 
+@@ -1193,7 +1196,7 @@
+   -- the ArrayObject instance generated from DictObject
+   arrdec <- genArrayObjectInstance name fields
+   -- the final instance
+-  return $ [InstanceD [] (AppT (ConT ''DictObject) (ConT name))
++  return $ [InstanceD Nothing [] (AppT (ConT ''DictObject) (ConT name))
+              [ FunD 'toDict [tdclause]
+              , FunD 'fromDictWKeys [fdclause]
+              ]]
+@@ -1324,7 +1327,7 @@
+ paramFieldTypeInfo :: String -> Field -> VarStrictTypeQ
+ paramFieldTypeInfo field_pfx fd = do
+   t <- actualFieldType fd
+-  return (snd $ paramFieldNames field_pfx fd, NotStrict, AppT (ConT ''Maybe) t)
++  return (snd $ paramFieldNames field_pfx fd, myNotStrict, AppT (ConT ''Maybe) t)
+ 
+ -- | Build a parameter declaration.
+ --
+@@ -1343,8 +1346,8 @@
+   fields_p <- mapM (paramFieldTypeInfo field_pfx) fields
+   let decl_f = RecC name_f fields_f
+       decl_p = RecC name_p fields_p
+-  let declF = DataD [] name_f [] [decl_f] [''Show, ''Eq]
+-      declP = DataD [] name_p [] [decl_p] [''Show, ''Eq]
++  declF <- DataD [] name_f [] Nothing [decl_f] <$> mapM conT [''Show, ''Eq]
++  declP <- DataD [] name_p [] Nothing [decl_p] <$> mapM conT [''Show, ''Eq]
+   ser_decls_f <- buildObjectSerialisation sname_f fields
+   ser_decls_p <- buildPParamSerialisation sname_p fields
+   fill_decls <- fillParam sname field_pfx fields
+@@ -1368,7 +1371,7 @@
+   (loadsig, loadfn) <- genLoadObject sname
+   shjson <- objectShowJSON sname
+   rdjson <- objectReadJSON sname
+-  let instdecl = InstanceD [] (AppT (ConT ''JSON.JSON) (ConT name))
++  let instdecl = InstanceD Nothing [] (AppT (ConT ''JSON.JSON) (ConT name))
+                  [rdjson, shjson]
+   return $ dictdecls ++ savedecls ++ [loadsig, loadfn, instdecl]
+ 
+@@ -1438,12 +1441,12 @@
+       mappendClause = Clause [pConP, pConP2] (NormalB mappendExp) []
+   let monoidType = AppT (ConT ''Monoid) (ConT name_p)
+   -- the instances combined
+-  return [ InstanceD [] instType
++  return [ InstanceD Nothing [] instType
+                      [ FunD 'fillParams [fclause]
+                      , FunD 'toPartial [tpclause]
+                      , FunD 'toFilled [tfclause]
+                      ]
+-         , InstanceD [] monoidType
++         , InstanceD Nothing [] monoidType
+                      [ FunD 'mempty [memptyClause]
+                      , FunD 'mappend [mappendClause]
+                      ]]
+--- a/src/Ganeti/THH/HsRPC.hs
++++ b/src/Ganeti/THH/HsRPC.hs
+@@ -73,7 +73,7 @@
+ #if MIN_VERSION_monad_control(1,0,0)
+ -- Needs Undecidable instances
+   type StM RpcClientMonad b = StM (ReaderT Client ResultG) b
+-  liftBaseWith f = RpcClientMonad . liftBaseWith
++  liftBaseWith f = RpcClientMonad $ liftBaseWith
+                    $ \r -> f (r . runRpcClientMonad)
+   restoreM = RpcClientMonad . restoreM
+ #else
+--- a/src/Ganeti/THH/Types.hs
++++ b/src/Ganeti/THH/Types.hs
+@@ -68,7 +68,7 @@
+ typeOfFun name = reify name >>= args
+   where
+     args :: Info -> Q Type
+-    args (VarI _ tp _ _) = return tp
++    args (VarI _ tp _) = return tp
+     args _               = fail $ "Not a function: " ++ show name
+ 
+ -- | Splits a function type into the types of its arguments and the result.
+--- a/src/Ganeti/WConfd/Monad.hs
++++ b/src/Ganeti/WConfd/Monad.hs
+@@ -181,7 +181,7 @@
+ #if MIN_VERSION_monad_control(1,0,0)
+ -- Needs Undecidable instances
+   type StM WConfdMonadInt b = StM WConfdMonadIntType b
+-  liftBaseWith f = WConfdMonadInt . liftBaseWith
++  liftBaseWith f = WConfdMonadInt $ liftBaseWith
+                    $ \r -> f (r . getWConfdMonadInt)
+   restoreM = WConfdMonadInt . restoreM
+ #else

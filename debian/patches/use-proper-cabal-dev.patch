@@ -1,0 +1,43 @@
+Author: Apollon Oikonomopoulos <apoikos@debian.org>
+Description: Force runhaskell to use the proper cabal-dev version
+ In Debian we have two versions of the cabal library:
+  - The version shipped with GHC
+  - The version shipped with libghc-cabal-dev
+ /usr/bin/cabal is /usually/ linked with the latter, but this may not be the
+ case (see Debian bug #832144). However, we need to make sure that we read
+ dist/setup-config with the same library as that used by the cabal binary that
+ created the file.
+
+Last-Update: 2016-07-24
+Forwarded: not-needed (debian-specific)
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -1373,6 +1373,17 @@
+ # downloading (only `cabal install` can do that).
+ HASKELL_PACKAGE_VERSIONS_FILE = cabal_macros.h
+ 
++# Debian-specific
++# In Debian we have two versions of the cabal library:
++#  - The version shipped with GHC
++#  - The version shipped with libghc-cabal-dev
++# /usr/bin/cabal is /usually/ linked with the latter, but this may not be the
++# case (see Debian bug #832144). However, we need to make sure that we read
++# dist/setup-config with the same library as that used by the cabal binary that
++# created the file.
++DEBIAN_CABAL_DEV_VERSION = \
++	$(shell $(CABAL) -V | $(AWK) '/^(compiled )?using version .* of the Cabal library/ { gsub(/^compiled/, ""); print $$3 }')
++
+ $(HASKELL_PACKAGE_VERSIONS_FILE): Makefile ganeti.cabal \
+                                   cabal/CabalDependenciesMacros.hs
+ 	touch empty-cabal-config
+@@ -1380,8 +1391,8 @@
+ 	  -f`test $(HTEST) == yes && echo "htest" || echo "-htest"` \
+ 	  -f`test $(ENABLE_MOND) == True && echo "mond" || echo "-mond"` \
+ 	  -f`test $(ENABLE_METADATA) == True && echo "metad" || echo "-metad"`
+-	runhaskell $(abs_top_srcdir)/cabal/CabalDependenciesMacros.hs \
+-	  ganeti.cabal \
++	runhaskell -hide-package=Cabal -package=Cabal-$(DEBIAN_CABAL_DEV_VERSION) \
++	  $(abs_top_srcdir)/cabal/CabalDependenciesMacros.hs ganeti.cabal \
+ 	  $(HASKELL_PACKAGE_IDS_FILE) \
+ 	  $(HASKELL_PACKAGE_VERSIONS_FILE)
+ 

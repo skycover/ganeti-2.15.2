@@ -1,0 +1,55 @@
+From feda79f89c5fb07b8a048f4c589ec14fecbe1ce6 Mon Sep 17 00:00:00 2001
+From: Apollon Oikonomopoulos <apoikos@gmail.com>
+Date: Mon, 21 Nov 2016 13:25:21 +0200
+Subject: [PATCH] GHC 8 support
+
+commit 33259158fd5bee89c761d7475bf4fab173454d65
+Author: Apollon Oikonomopoulos <apoikos@gmail.com>
+Date:   Mon Nov 21 13:23:17 2016 +0200
+
+    GHC 8 compatibility
+
+commit 16b9154edda729fb93335500cb467a194573025a
+Author: Bhimanavajjula Aditya <bsrk@google.com>
+Date:   Wed Sep 9 12:10:27 2015 +0200
+
+    Use explicit forall quantification for types
+
+    Implict quantifications will give an error from ghc 7.12
+
+    Signed-off-by: Bhimanavajjula Aditya <bsrk@google.com>
+    Signed-off-by: Petr Pudlak <pudlak@google.com>
+    Reviewed-by: Petr Pudlak <pudlak@google.com>
+---
+ src/Ganeti/Query/Filter.hs |  2 +-
+ src/Ganeti/THH.hs          | 23 +++++++++++++++--------
+ 2 files changed, 16 insertions(+), 9 deletions(-)
+
+--- a/src/Ganeti/Query/Filter.hs
++++ b/src/Ganeti/Query/Filter.hs
+@@ -136,7 +136,7 @@
+ -- | A type synonim for a rank-2 comparator function. This is used so
+ -- that we can pass the usual '<=', '>', '==' functions to 'binOpFilter'
+ -- and for them to be used in multiple contexts.
+-type Comparator = (Eq a, Ord a) => a -> a -> Bool
++type Comparator = forall a . (Eq a, Ord a) => a -> a -> Bool
+ 
+ -- | Equality checker.
+ --
+--- a/src/Ganeti/THH.hs
++++ b/src/Ganeti/THH.hs
+@@ -1,4 +1,4 @@
+-{-# LANGUAGE ParallelListComp, TemplateHaskell #-}
++{-# LANGUAGE ParallelListComp, TemplateHaskell, RankNTypes #-}
+ 
+ {-| TemplateHaskell helper for Ganeti Haskell code.
+ 
+@@ -482,7 +484,7 @@
+ genFromRaw :: Name -> Name -> Name -> [(String, Either String Name)] -> Q [Dec]
+ genFromRaw traw fname tname constructors = do
+   -- signature of form (Monad m) => String -> m $name
+-  sigt <- [t| (Monad m) => $(conT traw) -> m $(conT tname) |]
++  sigt <- [t| forall m. (Monad m) => $(conT traw) -> m $(conT tname) |]
+   -- clauses for a guarded pattern
+   let varp = mkName "s"
+       varpe = varE varp
