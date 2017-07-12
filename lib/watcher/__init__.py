@@ -67,7 +67,8 @@ from ganeti.watcher import nodemaint
 from ganeti.watcher import state
 
 
-MAXTRIES = 5
+MAXTRIES = 3
+STAGES_FILE = '/etc/ganeti/stages.conf'
 BAD_STATES = compat.UniqueFrozenset([
   constants.INSTST_ERRORDOWN,
   ])
@@ -203,6 +204,21 @@ class Node(object):
     self.offline = offline
     self.secondaries = secondaries
 
+def _ReadStages():
+  """Read stage definitions from file
+
+  """
+  stagelist = []
+  if os.path.isfile(STAGES_FILE):
+    stagefile = open(STAGES_FILE,'r')
+
+    for l in stagefile.readlines():
+      stageline = l.strip().split()
+      stagelist.append({'delay': stageline[0], 'instances': stageline[1].split(',')})
+
+    logging.debug("stages read from file: %s", stagelist)
+
+  return stagelist
 
 def _CleanupInstance(cl, notepad, inst, locks):
   n = notepad.NumberOfCleanupAttempts(inst.name)
@@ -233,16 +249,54 @@ def _CleanupInstance(cl, notepad, inst, locks):
     logging.exception("Error while cleaning up instance '%s'", inst.name)
     notepad.RecordCleanupAttempt(inst.name)
 
-
 def _CheckInstances(cl, notepad, instances, locks):
-  """Make a pass over the list of instances, restarting downed ones.
-
+  """Make a pass over the list of stages, starts instances from first stage
+     with down instances and then exit
   """
+  stagelist = _ReadStages()
+
   notepad.MaintainInstanceList(instances.keys())
 
   started = set()
+  stage_count=0
+  restart_needed=False
+
+  for stage in stagelist:
+    stage_instances={}
+    delay = stage['delay']
+    instances_list = stage['instances']
+    logging.debug("executing stage %s, starting instances: %s", stage_count, instances_list)
+    for inst_name in instances_list:
+      if inst_name in instances.keys():
+        stage_instances[inst_name]=instances[inst_name]
+
+    is_started,started=_CheckStageInstances(cl, notepad, stage_instances, locks)
+
+    # restart watcher if any instance started during the stage
+    if is_started == True:
+      logging.info("Stage %s exec end, sleeping for %s seconds", stage_count, delay)
+      time.sleep(int(delay))
+      restart_needed=True
+      return (restart_needed,started)
+
+    stage_count=stage_count+1
+
+  # check remaining instances if all stages finished
+  logging.debug("executing default stage, starting remaining instances: %s", instances.keys())
+  is_started,started=_CheckStageInstances(cl, notepad, instances, locks)
+  return (restart_needed,started)
+
+
+def _CheckStageInstances(cl, notepad, instances, locks):
+  """Make a pass over the list of instances, restarting downed ones.
+
+  """
+
+  started = set()
+  is_started = False
 
   for inst in instances.values():
+    logging.debug("instance: %s, status: %s", inst.name, inst.status)
     if inst.NeedsCleanup():
       _CleanupInstance(cl, notepad, inst, locks)
     elif inst.status in BAD_STATES:
@@ -262,6 +316,7 @@ def _CheckInstances(cl, notepad, instances, locks):
       try:
         logging.info("Restarting instance '%s' (attempt #%s)",
                      inst.name, n + 1)
+        is_started = True
         inst.Restart(cl)
       except Exception: # pylint: disable=W0703
         logging.exception("Error while restarting instance '%s'", inst.name)
@@ -276,7 +331,7 @@ def _CheckInstances(cl, notepad, instances, locks):
         if inst.status not in HELPLESS_STATES:
           logging.info("Restart of instance '%s' succeeded", inst.name)
 
-  return started
+  return (is_started, started)
 
 
 def _CheckDisks(cl, notepad, nodes, instances, started):
@@ -485,7 +540,7 @@ def ParseOptions():
   options.job_age = cli.ParseTimespec(options.job_age)
 
   if args:
-    parser.error("No arguments expected")
+    parser.error("No arguments expected: %s" % args)
 
   return (options, args)
 
@@ -863,7 +918,7 @@ def _GroupWatcher(opts):
                          pathutils.WATCHER_GROUP_INSTANCE_STATUS_FILE,
                          known_groups)
 
-    started = _CheckInstances(client, notepad, instances, locks)
+    restart_needed,started = _CheckInstances(client, notepad, instances, locks)
     _CheckDisks(client, notepad, nodes, instances, started)
     if not opts.no_verify_disks:
       _VerifyDisks(client, group_uuid, nodes, instances)
@@ -873,6 +928,20 @@ def _GroupWatcher(opts):
   else:
     # Save changes for next run
     notepad.Save(state_path)
+  
+  #restart watcher if some instances started from stages
+  if restart_needed == True:
+    # TODO: now restart instances for all node groups, must make opportunity to start children for given node group
+    logging.info("Executing after-stage watcher restart for node group %s", group_uuid)
+    #_StartGroupChildren(client, opts.wait_children)
+    try:
+      # TODO: Should utils.StartDaemon be used instead?
+      logging.info("Trying to restart after-stage %s" % ' '.join(sys.argv))
+      pid = os.spawnv(os.P_NOWAIT, sys.argv[0], sys.argv)
+    except Exception: # pylint: disable=W0703
+      logging.exception("Failed to restart after-stage %s" % ' '.join(sys.argv))
+    else:
+      logging.debug("Started with PID %s", pid)
 
   return constants.EXIT_SUCCESS
 
