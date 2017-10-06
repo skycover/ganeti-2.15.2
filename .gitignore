@@ -205,3 +205,6 @@ debian/python-ganeti-rapi.prerm.debhelper
 debian/python-ganeti-rapi.substvars
 debian/python-ganeti-rapi
 
+.pc
+debian/patches
+debian/source/include-binaries

@@ -10,3 +10,5 @@ use-proper-cabal-dev.patch
 0001-GHC-8-support.patch
 ghc8-fixes
 snap-server-1.0-compat
+sci
+sci2

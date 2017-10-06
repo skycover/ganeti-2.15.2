@@ -1,3 +1,16 @@
+ganeti (2.15.2-7+sci2) unstable; urgency=medium
+
+  * set ENABLE_METAD=False in defaults
+
+ -- Apollon Oikonomopoulos <apoikos@debian.org>  Tue, 13 Dec 2016 17:40:29 +0200
+
+ganeti (2.15.2-7+sci1) unstable; urgency=medium
+
+  * Add  blockev prefix for Solaris 11
+  * Add startup stages for watcher
+
+ -- Apollon Oikonomopoulos <apoikos@debian.org>  Tue, 13 Dec 2016 17:40:29 +0200
+
 ganeti (2.15.2-7) unstable; urgency=medium
 
   * Drop dependency on MonadCatchIO-transformers (Closes: #844970)

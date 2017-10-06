@@ -5,6 +5,7 @@ CONFD_ARGS=""
 MOND_ARGS=""
 WCONFD_ARGS=""
 LUXID_ARGS=""
+ENABLE_METAD=False
 WATCHER_START_DELAY="90"
 WATCHER_ACTIVE_FLAG="/var/run/ganeti/ganeti-watcher-active.flag"
 
