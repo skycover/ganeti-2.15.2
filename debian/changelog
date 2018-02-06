@@ -1,15 +1,21 @@
+ganeti (2.15.2-7+sci3) unstable; urgency=medium
+
+  * fixes for drbd >= 8.4: add drbdsetup new-device and new-mirror for network part assembling of drbd (needed for diskless states of drbd), relocate syncer parameters setting to local part (in 8.4 syncer require disk-config)
+
+ -- Vladimir Ipatov <vs@ipatov.net>  Tue, 02 Feb 2018 17:40:29 +0200
+
 ganeti (2.15.2-7+sci2) unstable; urgency=medium
 
   * set ENABLE_METAD=False in defaults
 
- -- Apollon Oikonomopoulos <apoikos@debian.org>  Tue, 13 Dec 2016 17:40:29 +0200
+ -- Vladimir Ipatov <vs@ipatov.net>  Tue, 13 Dec 2017 17:40:29 +0200
 
 ganeti (2.15.2-7+sci1) unstable; urgency=medium
 
   * Add  blockev prefix for Solaris 11
   * Add startup stages for watcher
 
- -- Apollon Oikonomopoulos <apoikos@debian.org>  Tue, 13 Dec 2016 17:40:29 +0200
+ -- Vladimir Ipatov <vs@ipatov.net>  Tue, 13 Dec 2017 17:40:29 +0200
 
 ganeti (2.15.2-7) unstable; urgency=medium
 
