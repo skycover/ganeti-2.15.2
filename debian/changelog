@@ -1,3 +1,9 @@
+ganeti (2.15.2-7+sci4) unstable; urgency=medium
+
+  * fix for ganeti user_shutdown design for xen. if user_shutdown disabled, set domain poweroff behaviour to destroy, if enabled, set to preserve
+
+ -- Vladimir Ipatov <vs@ipatov.net>  Tue, 02 Feb 2018 17:40:29 +0200
+
 ganeti (2.15.2-7+sci3) unstable; urgency=medium
 
   * fixes for drbd >= 8.4: add drbdsetup new-device and new-mirror for network part assembling of drbd (needed for diskless states of drbd), relocate syncer parameters setting to local part (in 8.4 syncer require disk-config)
